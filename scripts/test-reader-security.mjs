@@ -48,7 +48,7 @@ try {
   const env = { ...process.env, FOLIO_DEV_URL: origin, FOLIO_TEST_HIDDEN: "1", FOLIO_TEST_USER_DATA: profile };
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: createRequire(import.meta.url)("electron"), env,
-    args: [root, ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])] });
+    args: ["--mute-audio", root, ...(process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [])] });
   const page = await app.firstWindow();
   await page.waitForFunction(() => document.title === "Seed database");
   const red = pdf("1 0 0"), blue = pdf("0 0 1");

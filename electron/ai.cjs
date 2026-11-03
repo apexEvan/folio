@@ -29,7 +29,7 @@ const file = (name) => path.join(dir(), name);
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
 function writeAtomic(name, contents) {
-  fs.mkdirSync(dir(), { recursive: true });
+  fs.mkdirSync(dir(), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file(name) + ".tmp", contents, { mode: 0o600 });
   fs.renameSync(file(name) + ".tmp", file(name));
 }
@@ -85,13 +85,20 @@ async function getOpenIdConfig() {
   if (openIdConfig) return openIdConfig;
   const response = await net.fetch(`${AUTH_ISSUER}/.well-known/openid-configuration`);
   if (!response.ok) throw new Error("Couldn't reach OpenAI's sign-in service.");
-  openIdConfig = await response.json();
+  const config = await response.json();
+  if (new URL(config.jwks_uri).origin !== AUTH_ISSUER
+    || (config.revocation_endpoint && new URL(config.revocation_endpoint).origin !== AUTH_ISSUER)) {
+    throw new Error("Unexpected sign-in configuration.");
+  }
+  openIdConfig = config;
   return openIdConfig;
 }
 
 /** Verifies the ID token's RS256 signature and claims; returns its payload. */
 async function verifyIdToken(idToken, clientId, nonce) {
-  const [h, p, sig] = String(idToken).split(".");
+  const parts = String(idToken).split(".");
+  if (parts.length !== 3) throw new Error("Unexpected sign-in token.");
+  const [h, p, sig] = parts;
   const header = JSON.parse(Buffer.from(h, "base64url").toString());
   const payload = JSON.parse(Buffer.from(p, "base64url").toString());
   const config = await getOpenIdConfig();
@@ -177,10 +184,10 @@ async function signInChatGPT() {
       await shell.openExternal(`${AUTHORIZE_URL}?${new URLSearchParams(params)}`);
 
       const query = await Promise.race([callback, timeout]);
-      const clientId = query.get("client_id") || host.clientId;
+      const clientId = host.clientId || query.get("client_id");
       if (!clientId) throw new Error("ChatGPT didn't finish registering Folio. Please try again.");
       // Keep the issued client ID for every later sign-in on this computer, even if the rest fails.
-      if (host.clientId !== clientId) saveHost({ ...host, clientId });
+      if (!host.clientId) saveHost({ ...host, clientId });
       const exchange = await postForm(TOKEN_URL, {
         grant_type: "authorization_code", client_id: clientId, code: query.get("code"), code_verifier: verifier, redirect_uri: redirectUri, resource: API,
       });
@@ -324,9 +331,19 @@ function usageError(code, status) {
 }
 
 // ── Claude Code ────────────────────────────────────────────────────────────────────────────
+function makeClaudeDir() {
+  fs.mkdirSync(dir(), { recursive: true, mode: 0o700 });
+  return fs.mkdtempSync(path.join(dir(), "claude-"));
+}
+
 function run(cmd, args, timeout = 10_000) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, windowsHide: true, env: claudeEnv() }, (error, stdout) => resolve(error ? null : String(stdout)));
+    let cwd;
+    try { cwd = makeClaudeDir(); } catch { return resolve(null); }
+    execFile(cmd, args, { cwd, timeout, windowsHide: true, env: claudeEnv() }, (error, stdout) => {
+      try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {}
+      resolve(error ? null : String(stdout));
+    });
   });
 }
 
@@ -371,8 +388,8 @@ const CLAUDE_TIMEOUT_MS = 5 * 60_000;
 /** Removes prompt folders left behind if Folio or Claude Code exited mid-answer. */
 function cleanStaleClaudeFolders() {
   try {
-    for (const entry of fs.readdirSync(os.tmpdir())) {
-      if (entry.startsWith("folio-claude-")) fs.rmSync(path.join(os.tmpdir(), entry), { recursive: true, force: true });
+    for (const entry of fs.readdirSync(dir())) {
+      if (entry.startsWith("claude-")) fs.rmSync(path.join(dir(), entry), { recursive: true, force: true });
     }
   } catch {}
 }
@@ -382,8 +399,8 @@ async function askClaude({ model, document, messages }, emit, signal) {
   if (!exe) throw new Error("Claude Code isn't installed.");
   if (signal.aborted) return;
   const prompt = claudePrompt(document, messages);
-  // An empty working folder, no settings, MCP servers, slash commands, or tools: Claude only reads and answers.
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "folio-claude-"));
+  // An empty working folder inside Folio's user data, with no settings, MCP servers, slash commands, or tools: Claude only reads and answers.
+  const cwd = makeClaudeDir();
   const cleanup = () => { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {} };
   const promptFile = path.join(cwd, "system.txt");
   try {

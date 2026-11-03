@@ -12,7 +12,7 @@ const { guardSession, resolveDestination } = require("./network.cjs");
 const { safePdfName } = require("./filenames.cjs");
 const { csp } = require("./csp.cjs");
 const { WORD_FILE, openWord } = require("./convert.cjs");
-const { MAX_DOCUMENT_BYTES, checkDiskPath, readRegular } = require("./document-files.cjs");
+const { MAX_DOCUMENT_BYTES, OPENABLE, fileFromArgs, checkDiskPath, readRegular } = require("./document-files.cjs");
 
 if (!app.isPackaged && process.env.FOLIO_TEST_USER_DATA) app.setPath("userData", process.env.FOLIO_TEST_USER_DATA);
 // Automated tests drive a window that never appears, so a local run doesn't take over the screen or focus.
@@ -51,7 +51,6 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let win = null;
-const OPENABLE = /\.(pdf|docx?)$/i;
 let pendingFile = fileFromArgs(process.argv);
 let rendererReady = false;
 
@@ -69,11 +68,6 @@ app.on("open-file", (event, file) => {
     if (app.isReady() && !win) createWindow();
   }
 });
-
-function fileFromArgs(argv) {
-  const file = argv.slice(1).find((a) => !a.startsWith("-") && OPENABLE.test(a) && fs.existsSync(a));
-  return file ? path.resolve(file) : null;
-}
 
 // The read is async and size-capped like URL downloads: a huge file or a slow network
 // share shouldn't freeze the main process or balloon memory in two processes.
@@ -416,7 +410,7 @@ async function downloadPdf(url, approvedLocal) {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      if (result.error) request.abort();
+      if (result.error || result.webpage) request.abort();
       resolve(result);
     };
     const timer = setTimeout(() => finish({ error: "The download timed out." }), 60_000);
@@ -439,26 +433,37 @@ async function downloadPdf(url, approvedLocal) {
       const header = (key) => [].concat(response.headers[key] ?? [])[0];
       // A webpage: stop downloading and let the caller render it to PDF instead.
       if (/\b(text\/html|application\/xhtml\+xml)\b/i.test(header("content-type") ?? "")) {
-        request.abort();
         return finish({ webpage: url.toString() });
       }
       const tooBig = { error: "That PDF is larger than 300 MB." };
       if (Number(header("content-length")) > MAX_URL_PDF_BYTES) return finish(tooBig);
       const chunks = [];
       let size = 0;
+      let verifiedHeader = false;
+      const checkHeader = (head) => {
+        if (head.subarray(0, 1024).indexOf("%PDF-") >= 0) return true;
+        // Some servers don't label HTML; recognize it by its start.
+        if (/^\s*(<!doctype html|<html|<head|<body)/i.test(head.subarray(0, 512).toString("latin1"))) {
+          finish({ webpage: url.toString() });
+        } else {
+          finish({ error: "That link isn't a PDF or a webpage." });
+        }
+        return false;
+      };
       response.on("data", (chunk) => {
         size += chunk.byteLength;
-        if (size > MAX_URL_PDF_BYTES) finish(tooBig);
-        else chunks.push(chunk);
+        if (size > MAX_URL_PDF_BYTES) return finish(tooBig);
+        chunks.push(chunk);
+        if (!verifiedHeader && size >= 1024) {
+          verifiedHeader = true;
+          checkHeader(Buffer.concat(chunks, 1024));
+        }
       });
       response.on("error", () => finish({ error: "The download was interrupted." }));
       response.on("end", () => {
+        if (done) return;
         const data = Buffer.concat(chunks);
-        if (data.subarray(0, 1024).indexOf("%PDF-") < 0) {
-          // Some servers don't label HTML; recognize it by its start.
-          if (/^\s*(<!doctype html|<html|<head|<body)/i.test(data.subarray(0, 512).toString("latin1"))) return finish({ webpage: url.toString() });
-          return finish({ error: "That link isn't a PDF or a webpage." });
-        }
+        if (!verifiedHeader && !checkHeader(data)) return;
         finish({ name: pdfNameFromResponse(url, header("content-disposition")), data });
       });
     });
@@ -470,16 +475,17 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   // A second launch (e.g. double-clicking another PDF) hands its file to the running window.
-  app.on("second-instance", (_e, argv) => {
+  app.on("second-instance", (_e, argv, workingDirectory) => {
     if (!win) return;
     if (win.isMinimized()) win.restore();
     win.focus();
-    void sendFile(fileFromArgs(argv));
+    void sendFile(fileFromArgs(argv, workingDirectory));
   });
 
   app.whenReady().then(() => {
     protocol.handle("app", async (req) => {
-      const { pathname } = new URL(req.url);
+      const { host, pathname } = new URL(req.url);
+      if (host !== "folio") return new Response("Not found", { status: 404 });
       let file;
       try { file = path.normalize(path.join(DIST, decodeURIComponent(pathname))); } catch { return new Response("Bad request", { status: 400 }); }
       if (!file.startsWith(DIST + path.sep)) return new Response("Forbidden", { status: 403 });

@@ -6,6 +6,17 @@ const { pipeline } = require("node:stream/promises");
 
 const MAX_DOCUMENT_BYTES = 300 * 1024 * 1024;
 const MAX_HTML_BYTES = 48 * 1024 * 1024;
+const OPENABLE = /\.(pdf|docx?)$/i;
+
+function fileFromArgs(argv, cwd = process.cwd()) {
+  const base = typeof cwd === "string" && cwd ? cwd : process.cwd();
+  for (const arg of argv.slice(1)) {
+    if (typeof arg !== "string" || arg.startsWith("-") || !OPENABLE.test(arg)) continue;
+    const candidate = path.resolve(base, arg);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
 const tooLarge = (limit = MAX_DOCUMENT_BYTES) => Object.assign(new Error("The file exceeds the size limit."),
   { userMessage: limit === MAX_DOCUMENT_BYTES ? "It's larger than 300 MB." : "It's too large to convert." });
 const changed = () => new Error("The file changed while it was being opened.");
@@ -107,4 +118,4 @@ async function rememberPdf(profile, staged, index, data) {
   } finally { await fsp.rm(temp, { force: true }); }
 }
 
-module.exports = { MAX_DOCUMENT_BYTES, MAX_HTML_BYTES, checkDiskPath, tooLarge, readRegular, stageWord, sameFile, pdfName, cachedPdf, rememberPdf };
+module.exports = { MAX_DOCUMENT_BYTES, MAX_HTML_BYTES, OPENABLE, fileFromArgs, checkDiskPath, tooLarge, readRegular, stageWord, sameFile, pdfName, cachedPdf, rememberPdf };

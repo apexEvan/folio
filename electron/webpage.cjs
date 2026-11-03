@@ -106,12 +106,20 @@ async function captureWebpage(rawUrl, approvedLocal) {
     contents.setAudioMuted(true);
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
     contents.on("will-navigate", (event, next) => { if (!/^https?:/i.test(next)) event.preventDefault(); });
+    contents.on("select-client-certificate", (event) => event.preventDefault());
 
-    // Lay the page out with its screen styles, not its print stylesheet. (Emulation needs a loaded
-    // document first: setting it on a fresh window crashes Electron 45.)
+    // Lay the page out with its screen styles, not its print stylesheet, and dismiss modal JavaScript
+    // dialogs so a page cannot block capture or pop up an alert. (Emulation needs a loaded document
+    // first: setting it on a fresh window crashes Electron 45.)
     try {
       await contents.loadURL("about:blank");
       contents.debugger.attach("1.3");
+      contents.debugger.on("message", (_event, method) => {
+        if (method === "Page.javascriptDialogOpening") {
+          contents.debugger.sendCommand("Page.handleJavaScriptDialog", { accept: false }).catch(() => {});
+        }
+      });
+      await contents.debugger.sendCommand("Page.enable");
       await contents.debugger.sendCommand("Emulation.setEmulatedMedia", { media: "screen" });
     } catch {
       /* falls back to print styles */
@@ -125,7 +133,7 @@ async function captureWebpage(rawUrl, approvedLocal) {
       }
       await contents.insertCSS(FIDELITY_CSS, { cssOrigin: "user" }).catch(() => {});
       await delay(800);
-      await withTimeout(contents.executeJavaScript(PREPARE_PAGE, true), SCROLL_TIMEOUT_MS, "scroll").catch(() => {});
+      await withTimeout(contents.executeJavaScript(PREPARE_PAGE, false), SCROLL_TIMEOUT_MS, "scroll").catch(() => {});
       await delay(600);
       const data = await contents.printToPDF({
         printBackground: true,

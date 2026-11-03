@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const JSZip = require("jszip");
-const { stageWord, readRegular, cachedPdf, rememberPdf } = require("../electron/document-files.cjs");
+const { fileFromArgs, stageWord, readRegular, cachedPdf, rememberPdf } = require("../electron/document-files.cjs");
 const { boundedParts } = require("../electron/docx-parts.cjs");
 const { publish } = require("../electron/word-publish.cjs");
 const { systemPowerShell } = require("../electron/windows-powershell.cjs");
@@ -192,4 +192,21 @@ test("directory records are counted before duplicate or aliased ZIP names can be
   const alias = new JSZip();
   alias.file("word/../a", "1", { createFolders: false });
   await assert.rejects(boundedParts(await alias.generateAsync({ type: "nodebuffer" }), limits), /ZIP directory/);
+});
+
+test("command-line file arguments resolve against the caller's working directory", async (t) => {
+  const firstDir = await folder(t);
+  const secondDir = await folder(t);
+  const wrongPdf = path.join(firstDir, "Report.pdf");
+  const rightPdf = path.join(secondDir, "Report.pdf");
+  await fs.writeFile(wrongPdf, "%PDF-wrong");
+  await fs.writeFile(rightPdf, "%PDF-right");
+  const cwd = process.cwd();
+  process.chdir(firstDir);
+  try {
+    assert.equal(fileFromArgs(["folio", "--flag", "Report.pdf"], secondDir), rightPdf);
+    assert.equal(fileFromArgs(["folio", "--flag", "missing.pdf"], secondDir), null);
+  } finally {
+    process.chdir(cwd);
+  }
 });
