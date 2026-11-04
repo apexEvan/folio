@@ -11,6 +11,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
+import { checkSignatureDragging } from "./smoke-signature-drag.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -157,6 +158,7 @@ try {
   await page.locator('input[aria-label="Upload signature photo"]').setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(photo, "base64") });
   await page.getByRole("button", { name: /Use this signature/ }).click();
   await page.locator('select[aria-label="Signature placement"]').selectOption("manual");
+  await checkSignatureDragging(page, shots);
   await page.locator('[aria-label^="Place signature on page"]').click();
   await page.getByRole("button", { name: /Approve and add signature/ }).click();
   await page.locator(".dirty-dot").waitFor();
