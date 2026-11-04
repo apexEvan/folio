@@ -11,6 +11,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { readerPage } from "./reader-page.mjs";
 import { checkReaderTools } from "./smoke-reader-tools.mjs";
+import { checkSignatureTargets } from "./smoke-signature-targets.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -723,6 +724,7 @@ try {
   await aiPanel.getByRole("button", { name: "Close Ask AI" }).click();
   console.log("ok  closing Ask AI stops the answer in progress");
 
+  await checkSignatureTargets(app, page, photo, shots);
   assert.deepEqual(failures, []);
   console.log(`PASS (${process.platform})`);
 } finally {
