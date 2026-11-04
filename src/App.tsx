@@ -43,6 +43,7 @@ import { ChangelogDialog } from "./ChangelogDialog";
 import type { Release } from "./releaseNotes";
 import { detectSignatureTargets, placeSignature, type SignatureTarget } from "./signatures";
 import { keepDrawingPointer } from "./drawing";
+import { finishTextOnClickAway } from "./textEditing";
 import { drawShapes, type Shape } from "./shapes";
 import { enableWheelPaging } from "./wheelPaging";
 
@@ -267,6 +268,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
     });
     trackPageImages(eventBus);
     const stopDrawingPointer = keepDrawingPointer(container);
+    const stopTextClickAway = finishTextOnClickAway(container, viewer, eventBus);
     linkService.setViewer(viewer);
     viewerRef.current = viewer;
     markupRef.current = new MarkupController(eventBus, viewer, setMarkup);
@@ -333,7 +335,7 @@ export default function App({ tabs, tabKey, upgradeNotes }: { tabs: DocumentTabs
       });
     };
     container.addEventListener("wheel", onWheel, { passive: false });
-    return () => { stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
+    return () => { stopTextClickAway(); stopDrawingPointer(); container.removeEventListener("wheel", onWheel); };
   }, []);
 
   useEffect(() => {
