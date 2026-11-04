@@ -128,7 +128,7 @@ Choose **Sign** in the toolbar to add a signature.
 - **Suggested placement:** Folio checks the current page for empty PDF signature fields and likely signature labels,
   then offers places to sign. Detection is a suggestion, not a guarantee that every field will be found.
 - **Preview and position:** review the actual page, pick a suggestion or place the signature manually, and adjust its
-  width before approving.
+  width before approving. Drag the signature to see its position as you move it, or focus the preview and use the arrow keys.
 - **Explicit approval:** nothing is added until you click **Approve and add signature**. Signatures are visual stamps,
   not certificate-based digital signatures. Use **Save a copy** to keep a signed PDF; placed signatures are not part
   of Folio's automatic annotation restoration.

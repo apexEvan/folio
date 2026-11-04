@@ -1398,9 +1398,11 @@ kbd {
 .signature-field select { min-width: 0; width: 100%; padding: 8px; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: 7px; font: inherit; }
 .signature-page-stage { display: flex; justify-content: center; min-width: 0; padding: 2px 0; }
 .signature-page { position: relative; max-width: 100%; background: white; box-shadow: var(--page-shadow); flex-shrink: 1; }
-.signature-page[data-placeable] { cursor: crosshair; }
+.signature-page[data-placeable] { cursor: crosshair; touch-action: none; user-select: none; }
 .signature-page-background { display: block; width: 100%; height: 100%; pointer-events: none; }
 .signature-placement { position: absolute; outline: 1.5px dashed var(--accent); outline-offset: 3px; pointer-events: none; }
+.signature-page[data-placeable] .signature-placement { pointer-events: auto; cursor: grab; }
+.signature-page[data-placeable]:active .signature-placement { cursor: grabbing; }
 .signature-page-loading { display: grid; place-content: center; justify-items: center; gap: 10px; min-height: 310px; color: var(--text-3); font-size: 11px; }
 .signature-error { padding: 10px 24px; flex-shrink: 0; }
 .signature-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 24px; border-top: 1px solid var(--line); flex-shrink: 0; }

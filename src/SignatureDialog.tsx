@@ -32,9 +32,14 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
   const captureGeneration = useRef(0);
   const mounted = useRef(true);
   const dragStart = useRef<number[] | null>(null);
+  const placementDrag = useRef<{
+    pointerId: number; offsetX: number; offsetY: number; width: number;
+    targetId: string; manualRect: number[] | null; size: number;
+  } | null>(null);
   const selected = targets.find(target => target.id === targetId);
   const bounds = selected?.rect || manualRect;
   const rect = signature && bounds ? fitSignature(signature, bounds) : null;
+  const placementWidth = rect ? rect[2] - rect[0] : size;
 
   useEffect(() => {
     mounted.current = true;
@@ -159,6 +164,50 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
     const positionY = Math.max(bottom, Math.min(top - height, pointY - height / 2));
     setManualRect([positionX, positionY, positionX + width, positionY + height]);
   };
+  const pagePoint = (event: React.PointerEvent<HTMLDivElement>, pagePreview: NonNullable<typeof preview>) => {
+    const area = event.currentTarget.getBoundingClientRect();
+    return pagePreview.viewport.convertToPdfPoint(
+      (event.clientX - area.left) * pagePreview.width / area.width,
+      (event.clientY - area.top) * pagePreview.height / area.height,
+    );
+  };
+  const movePlacement = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = placementDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId || !preview) return;
+    const [x, y] = pagePoint(event, preview);
+    placeAt(x + drag.offsetX, y + drag.offsetY, drag.width);
+  };
+  const cancelPlacement = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = placementDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    placementDrag.current = null;
+    setTargetId(drag.targetId); setManualRect(drag.manualRect); setSize(drag.size);
+  };
+
+  const startPlacement = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!preview || !ready || busy || !event.isPrimary || event.button !== 0 || placementDrag.current) return;
+    const [x, y] = pagePoint(event, preview);
+    const grabbed = rect && x >= rect[0] && x <= rect[2] && y >= rect[1] && y <= rect[3];
+    if (targetId !== "manual" && !grabbed) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const width = grabbed ? rect[2] - rect[0] : size;
+    placementDrag.current = {
+      pointerId: event.pointerId,
+      offsetX: grabbed ? (rect[0] + rect[2]) / 2 - x : 0,
+      offsetY: grabbed ? (rect[1] + rect[3]) / 2 - y : 0,
+      width, targetId, manualRect, size,
+    };
+    setTargetId("manual"); setSize(width);
+    movePlacement(event);
+  };
+  const finishPlacement = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (placementDrag.current?.pointerId !== event.pointerId) return;
+    movePlacement(event);
+    placementDrag.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  };
 
   return <Modal title={"Sign page " + pageNumber} onClose={() => { if (!busy) onClose(); }}>
     <div className="signature-dialog">
@@ -207,30 +256,28 @@ export function SignatureDialog({ pdf, pageNumber, targets, onApprove, onClose }
           <div className="signature-section-head"><h3>Page {pageNumber}</h3><span className="signature-badge">{selected ? "Suggested position" : "Page preview"}</span></div>
           {ready && <div className="signature-placement-controls">
             <label className="signature-field">Placement<select aria-label="Signature placement" value={targetId} onChange={event => setTargetId(event.target.value)}>{targets.map(target => <option key={target.id} value={target.id}>{target.label}</option>)}<option value="manual">Choose a position on this page</option></select></label>
-            {targetId === "manual" && <label className="signature-range">Signature width <input aria-label="Signature width" type="range" min="40" max="300" value={size} onChange={event => {
+            <label className="signature-range">Signature width <input aria-label="Signature width" type="range" min={Math.min(40, placementWidth)} max={Math.max(300, placementWidth)} value={placementWidth} onChange={event => {
               const width = +event.target.value;
-              setSize(width);
-              if (manualRect) placeAt((manualRect[0] + manualRect[2]) / 2, (manualRect[1] + manualRect[3]) / 2, width);
-            }} /></label>}
+              setTargetId("manual"); setSize(width);
+              if (rect) placeAt((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2, width);
+            }} /></label>
           </div>}
           <div className="signature-page-stage">
-            {preview ? <div className="signature-page" data-placeable={ready && targetId === "manual" || undefined} style={{ width: Math.min(280, preview.width), aspectRatio: preview.width / preview.height }}
-              role={ready && targetId === "manual" ? "button" : undefined} tabIndex={ready && targetId === "manual" ? 0 : undefined} aria-label={ready && targetId === "manual" ? "Place signature on page " + pageNumber : undefined} aria-describedby="signature-placement-hint"
-              onClick={event => {
-                if (!ready || targetId !== "manual") return;
-                const area = event.currentTarget.getBoundingClientRect();
-                const [pointX, pointY] = preview.viewport.convertToPdfPoint((event.clientX - area.left) * preview.width / area.width, (event.clientY - area.top) * preview.height / area.height);
-                placeAt(pointX, pointY);
-              }} onKeyDown={event => {
-                if (!ready || targetId !== "manual" || !["Enter", " ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+            {preview ? <div className="signature-page" data-placeable={ready || undefined} style={{ width: Math.min(280, preview.width), aspectRatio: preview.width / preview.height }}
+              role={ready ? "button" : undefined} tabIndex={ready ? 0 : undefined} aria-label={ready ? "Place signature on page " + pageNumber : undefined} aria-describedby="signature-placement-hint"
+              onPointerDown={startPlacement} onPointerMove={movePlacement} onPointerUp={finishPlacement}
+              onPointerCancel={cancelPlacement} onLostPointerCapture={cancelPlacement} onKeyDown={event => {
+                if (!ready || busy || placementDrag.current || !["Enter", " ", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
                 event.preventDefault();
-                const area = manualRect || preview.viewport.viewBox;
-                placeAt((area[0] + area[2]) / 2 + (event.key === "ArrowLeft" ? -5 : event.key === "ArrowRight" ? 5 : 0), (area[1] + area[3]) / 2 + (event.key === "ArrowDown" ? -5 : event.key === "ArrowUp" ? 5 : 0));
-              }}><img className="signature-page-background" src={preview.url} alt={"Page " + pageNumber + " placement preview"} />
-                {signature && screenRect && <img className="signature-placement" src={signature.url} alt="Proposed signature location" style={{ left: Math.min(screenRect[0], screenRect[2]) / preview.width * 100 + "%", top: Math.min(screenRect[1], screenRect[3]) / preview.height * 100 + "%", width: Math.abs(screenRect[2] - screenRect[0]) / preview.width * 100 + "%", height: Math.abs(screenRect[3] - screenRect[1]) / preview.height * 100 + "%" }} />}
+                const area = rect || preview.viewport.viewBox;
+                const width = rect ? rect[2] - rect[0] : size;
+                setTargetId("manual"); setSize(width);
+                placeAt((area[0] + area[2]) / 2 + (event.key === "ArrowLeft" ? -5 : event.key === "ArrowRight" ? 5 : 0), (area[1] + area[3]) / 2 + (event.key === "ArrowDown" ? -5 : event.key === "ArrowUp" ? 5 : 0), width);
+              }}><img className="signature-page-background" draggable={false} src={preview.url} alt={"Page " + pageNumber + " placement preview"} />
+                {signature && screenRect && <img className="signature-placement" draggable={false} src={signature.url} alt="Proposed signature location" style={{ left: Math.min(screenRect[0], screenRect[2]) / preview.width * 100 + "%", top: Math.min(screenRect[1], screenRect[3]) / preview.height * 100 + "%", width: Math.abs(screenRect[2] - screenRect[0]) / preview.width * 100 + "%", height: Math.abs(screenRect[3] - screenRect[1]) / preview.height * 100 + "%" }} />}
               </div> : <div className="signature-page-loading" role="status"><Icon name="file" size={30} /><span>Loading page preview...</span></div>}
           </div>
-          <p className="signature-hint" id="signature-placement-hint" aria-live="polite">{!ready ? "Your signature will appear here for review." : selected ? "Signature field or line detected. Check the suggested position." : manualRect ? "Click to reposition, or use the arrow keys to fine-tune." : "Click the page to place your signature, or focus it and press Enter."}</p>
+          <p className="signature-hint" id="signature-placement-hint" aria-live="polite">{!ready ? "Your signature will appear here for review." : selected ? "Check the suggested position. Drag the signature to adjust it." : manualRect ? "Drag to reposition, or use the arrow keys to fine-tune." : "Click or drag on the page to place your signature, or focus it and press Enter."}</p>
         </section>
       </fieldset></div>
       {error && <p className="form-error signature-error" role="alert">{error}</p>}
